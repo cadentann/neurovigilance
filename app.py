@@ -221,13 +221,30 @@ TIER_COLORS = {"STRONG":"#791F1F","MODERATE":"#633806","WATCH":"#3C3489"}
 TIER_BG     = {"STRONG":"#FCEBEB","MODERATE":"#FAEEDA","WATCH":"#EEEDFE"}
 TIER_THRESH = [(8,"STRONG"),(3,"MODERATE"),(2,"WATCH")]
 
-PLOT_THEME = dict(
+_BASE_LAYOUT = dict(
     plot_bgcolor="#FDFCF9", paper_bgcolor="#FDFCF9",
     font=dict(family="DM Sans",color="#6B6760",size=11),
-    xaxis=dict(gridcolor="#EEECEA",linecolor="#D8D4CB",tickfont=dict(size=9,color="#A09B94")),
-    yaxis=dict(gridcolor="#EEECEA",linecolor="#D8D4CB",tickfont=dict(size=9,color="#A09B94")),
     margin=dict(l=10,r=10,t=44,b=20),
 )
+_BASE_AXIS = dict(gridcolor="#EEECEA",linecolor="#D8D4CB",tickfont=dict(size=9,color="#A09B94"))
+
+def _layout(**overrides):
+    """Merge base layout with per-call overrides without duplicate kwarg errors."""
+    merged = dict(_BASE_LAYOUT)
+    # Deep-merge xaxis/yaxis so callers can extend without conflict
+    if "xaxis" in overrides:
+        merged["xaxis"] = {**_BASE_AXIS, **overrides.pop("xaxis")}
+    else:
+        merged["xaxis"] = dict(_BASE_AXIS)
+    if "yaxis" in overrides:
+        merged["yaxis"] = {**_BASE_AXIS, **overrides.pop("yaxis")}
+    else:
+        merged["yaxis"] = dict(_BASE_AXIS)
+    merged.update(overrides)
+    return merged
+
+# Keep PLOT_THEME as alias for code that doesn't override axes
+PLOT_THEME = _layout()
 
 EBGM_A1,EBGM_B1 = 0.20,0.06
 EBGM_A2,EBGM_B2 = 1.40,1.80
@@ -407,10 +424,12 @@ def forest_fig(sigs,drug):
     fig.add_vline(x=2,line_dash="dash",line_color="#D8D4CB",line_width=1.5,
                   annotation_text="PRR = 2",annotation_font_size=9,annotation_font_color="#A09B94")
     fig.add_vline(x=1,line_dash="dot",line_color="#EEECEA",line_width=1)
-    fig.update_layout(**PLOT_THEME,height=max(300,32*len(df)+80),
+    fig.update_layout(**_layout(
+        height=max(300,32*len(df)+80),
         title=dict(text=f"Forest Plot — {drug}  ·  PRR with 95% CI",font=dict(family="EB Garamond",size=16,color="#1E1C1A")),
-        xaxis=dict(title="PRR (log scale)",type="log",gridcolor="#EEECEA"),
-        yaxis=dict(tickfont=dict(size=9,color="#6B6760")),margin=dict(l=10,r=30,t=50,b=30))
+        xaxis=dict(title="PRR (log scale)",type="log"),
+        yaxis=dict(tickfont=dict(size=9,color="#6B6760")),
+        margin=dict(l=10,r=30,t=50,b=30)))
     return fig
 
 def volcano_fig(prr_df,drug):
@@ -426,9 +445,9 @@ def volcano_fig(prr_df,drug):
         size="n",size_max=14,labels={"log2_prr":"log₂(PRR)","neg_logp":"−log₁₀(p adj)"})
     fig.add_vline(x=1,line_dash="dash",line_color="#D8D4CB",line_width=1,annotation_text="PRR=2",annotation_font_size=9,annotation_font_color="#A09B94")
     fig.add_hline(y=-np.log10(0.05),line_dash="dash",line_color="#D8D4CB",line_width=1,annotation_text="p=0.05",annotation_font_size=9,annotation_font_color="#A09B94",annotation_position="right")
-    fig.update_layout(**PLOT_THEME,height=380,
+    fig.update_layout(**_layout(height=380,
         title=dict(text=f"Volcano — {drug}",font=dict(family="EB Garamond",size=16,color="#1E1C1A")),
-        legend=dict(font=dict(size=10),bgcolor="rgba(253,252,249,0.95)",bordercolor="#D8D4CB",borderwidth=1))
+        legend=dict(font=dict(size=10),bgcolor="rgba(253,252,249,0.95)",bordercolor="#D8D4CB",borderwidth=1)))
     return fig
 
 def sankey_fig(sigs,drug):
@@ -450,9 +469,9 @@ def sankey_fig(sigs,drug):
     fig=go.Figure(go.Sankey(
         node=dict(pad=14,thickness=14,line=dict(color="#D8D4CB",width=0.5),label=nodes,color=nc),
         link=dict(source=src,target=tgt,value=val,color=col)))
-    fig.update_layout(**PLOT_THEME,height=480,
+    fig.update_layout(**_layout(height=480,
         title=dict(text=f"Signal Flow — {drug} → System Organ Class → Reaction",font=dict(family="EB Garamond",size=16,color="#1E1C1A")),
-        font=dict(size=9,family="DM Sans"))
+        font=dict(size=9,family="DM Sans")))
     return fig
 
 def threed_fig(all_dfs,drugs):
@@ -510,10 +529,11 @@ def network_fig(sigs,drug):
         text=nt_,textposition="top center",textfont=dict(size=8,color="#6B6760",family="DM Sans"),
         hovertext=nh_,hoverinfo="text",showlegend=False)
     fig=go.Figure(data=edge_traces+[node_t])
-    fig.update_layout(**PLOT_THEME,height=500,
+    fig.update_layout(**_layout(height=500,
         title=dict(text=f"Signal Network — {drug}  ·  AE Bipartite Graph",font=dict(family="EB Garamond",size=16,color="#1E1C1A")),
         xaxis=dict(showgrid=False,zeroline=False,showticklabels=False),
-        yaxis=dict(showgrid=False,zeroline=False,showticklabels=False),margin=dict(l=0,r=0,t=50,b=0))
+        yaxis=dict(showgrid=False,zeroline=False,showticklabels=False),
+        margin=dict(l=0,r=0,t=50,b=0)))
     return fig
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
@@ -707,9 +727,9 @@ with t_landscape:
             fig_eo=go.Figure()
             fig_eo.add_bar(x=eo["Reaction"],y=eo["n"],name="Observed",marker_color="#3C3489",opacity=0.9)
             fig_eo.add_bar(x=eo["Reaction"],y=eo["Expected"],name="Expected",marker_color="#D8D4CB",opacity=0.9)
-            fig_eo.update_layout(**PLOT_THEME,height=260,barmode="group",
+            fig_eo.update_layout(**_layout(height=260,barmode="group",
                 title=dict(text="Observed vs. Expected",font=dict(family="EB Garamond",size=16,color="#1E1C1A")),
-                xaxis=dict(tickangle=-35),legend=dict(font=dict(size=10)),margin=dict(l=10,r=10,t=44,b=80))
+                xaxis=dict(tickangle=-35),legend=dict(font=dict(size=10)),margin=dict(l=10,r=10,t=44,b=80)))
             st.plotly_chart(fig_eo,use_container_width=True)
     with l2:
         if not sigs.empty:
@@ -721,9 +741,9 @@ with t_landscape:
                     marker=dict(color=smq_c["mean_prr"],colorscale=[[0,"#EEEDFE"],[0.5,"#7F77DD"],[1,"#3C3489"]],
                                 colorbar=dict(title=dict(text="Avg PRR",font=dict(size=9,color="#A09B94")),tickfont=dict(size=8,color="#A09B94"),len=0.7)),
                     text=smq_c["signals"],textposition="outside",textfont=dict(size=9,color="#A09B94")))
-                fig_smq.update_layout(**PLOT_THEME,height=360,
+                fig_smq.update_layout(**_layout(height=360,
                     title=dict(text="SMQ Signal Density",font=dict(family="EB Garamond",size=16,color="#1E1C1A")),
-                    margin=dict(l=20,r=60,t=44,b=30))
+                    margin=dict(l=20,r=60,t=44,b=30)))
                 st.plotly_chart(fig_smq,use_container_width=True)
 
             st.markdown("<div class='section-label'>EBGM vs PRR — Bayesian Shrinkage</div>",unsafe_allow_html=True)
@@ -735,9 +755,9 @@ with t_landscape:
                 fig_ep.add_shape(type="line",x0=0,y0=0,x1=mx,y1=mx,line=dict(color="#D8D4CB",width=1,dash="dot"))
                 fig_ep.add_vline(x=2,line_dash="dash",line_color="#D8D4CB",line_width=1)
                 fig_ep.add_hline(y=2,line_dash="dash",line_color="#D8D4CB",line_width=1)
-                fig_ep.update_layout(**PLOT_THEME,height=300,
+                fig_ep.update_layout(**_layout(height=300,
                     title=dict(text="EBGM shrinkage",font=dict(size=13,color="#1E1C1A")),
-                    legend=dict(font=dict(size=9),bgcolor="rgba(253,252,249,0.95)"),margin=dict(l=10,r=10,t=40,b=30))
+                    legend=dict(font=dict(size=9),bgcolor="rgba(253,252,249,0.95)"),margin=dict(l=10,r=10,t=40,b=30)))
                 st.plotly_chart(fig_ep,use_container_width=True)
 
 # ══ TAB 3 — 3D ═══════════════════════════════════════════════════════════════
@@ -780,10 +800,10 @@ with t_temporal:
                 color_discrete_sequence=["#3C3489","#7F77DD","#633806","#27500A","#A09B94"])
             fig_t.add_hline(y=2,line_dash="dot",line_color="#D8D4CB",line_width=1,
                             annotation_text="PRR=2",annotation_font_size=9,annotation_font_color="#A09B94")
-            fig_t.update_layout(**PLOT_THEME,height=380,
+            fig_t.update_layout(**_layout(height=380,
                 title=dict(text=f"{win}-Quarter Rolling PRR — {sel_drug}",font=dict(family="EB Garamond",size=16,color="#1E1C1A")),
                 xaxis=dict(tickangle=-45,tickfont=dict(size=8)),
-                legend=dict(font=dict(size=10),bgcolor="rgba(253,252,249,0.95)",bordercolor="#D8D4CB",borderwidth=1))
+                legend=dict(font=dict(size=10),bgcolor="rgba(253,252,249,0.95)",bordercolor="#D8D4CB",borderwidth=1)))
             st.plotly_chart(fig_t,use_container_width=True)
             delta_rows=[]
             for rxn in top5:
@@ -825,18 +845,18 @@ with t_demo:
             st.markdown("<div class='section-label'>Age Distribution</div>",unsafe_allow_html=True)
             fig_age=px.histogram(dr2,x="age",nbins=22,color="sex",
                 color_discrete_map={"Male":"#3C3489","Female":"#791F1F","Unknown":"#D8D4CB"},barmode="overlay",opacity=0.75)
-            fig_age.update_layout(**PLOT_THEME,height=190,title=dict(text="Age at Onset",font=dict(size=13,color="#1E1C1A")),
-                xaxis_title="Age (years)",yaxis_title="Count",legend=dict(font=dict(size=9)),margin=dict(l=10,r=10,t=40,b=30))
+            fig_age.update_layout(**_layout(height=190,title=dict(text="Age at Onset",font=dict(size=13,color="#1E1C1A")),
+                xaxis_title="Age (years)",yaxis_title="Count",legend=dict(font=dict(size=9)),margin=dict(l=10,r=10,t=40,b=30)))
             st.plotly_chart(fig_age,use_container_width=True)
         st.markdown("<div class='section-label'>Seriousness</div>",unsafe_allow_html=True)
         sc=dr2["serious"].value_counts().reset_index(); sc.columns=["Category","Count"]
         fig_sc=px.bar(sc,x="Category",y="Count",color="Category",color_discrete_map={"Serious":"#791F1F","Non-serious":"#3C3489","Unknown":"#D8D4CB"})
-        fig_sc.update_layout(**PLOT_THEME,height=175,showlegend=False,title=dict(text="Seriousness",font=dict(size=13,color="#1E1C1A")),margin=dict(l=10,r=10,t=40,b=10))
+        fig_sc.update_layout(**_layout(height=175,showlegend=False,title=dict(text="Seriousness",font=dict(size=13,color="#1E1C1A")),margin=dict(l=10,r=10,t=40,b=10)))
         st.plotly_chart(fig_sc,use_container_width=True)
         st.markdown("<div class='section-label'>Reports per Year</div>",unsafe_allow_html=True)
         yc=dr2["year"].dropna().astype(int).value_counts().reset_index(); yc.columns=["Year","Count"]; yc=yc.sort_values("Year")
         fig_yc=px.bar(yc,x="Year",y="Count",color_discrete_sequence=["#7F77DD"])
-        fig_yc.update_layout(**PLOT_THEME,height=170,showlegend=False,title=dict(text="Report Volume by Year",font=dict(size=13,color="#1E1C1A")),margin=dict(l=10,r=10,t=40,b=10))
+        fig_yc.update_layout(**_layout(height=170,showlegend=False,title=dict(text="Report Volume by Year",font=dict(size=13,color="#1E1C1A")),margin=dict(l=10,r=10,t=40,b=10)))
         st.plotly_chart(fig_yc,use_container_width=True)
 
 # ══ TAB 7 — CROSS-DRUG ═══════════════════════════════════════════════════════
@@ -856,10 +876,10 @@ with t_crossdrug:
             colorscale=[[0,"#FDFCF9"],[0.1,"#EEEDFE"],[0.35,"#7F77DD"],[0.65,"#3C3489"],[0.85,"#791F1F"],[1,"#3d0a0a"]],
             zmin=0,zmax=25,colorbar=dict(title=dict(text="PRR",font=dict(size=10,color="#A09B94")),tickfont=dict(size=9,color="#A09B94"),len=0.8),
             hovertemplate="<b>%{x}</b><br>%{y}: PRR = %{z:.2f}<extra></extra>"))
-        fig_h.update_layout(**PLOT_THEME,height=230,
+        fig_h.update_layout(**_layout(height=230,
             title=dict(text="Class-Level PRR Heatmap",font=dict(family="EB Garamond",size=16,color="#1E1C1A")),
             xaxis=dict(tickangle=-40,tickfont=dict(size=8,color="#A09B94")),
-            yaxis=dict(tickfont=dict(size=11,color="#6B6760")),margin=dict(l=10,r=10,t=50,b=130))
+            yaxis=dict(tickfont=dict(size=11,color="#6B6760")),margin=dict(l=10,r=10,t=50,b=130)))
         st.plotly_chart(fig_h,use_container_width=True)
 
         class_sigs=[r for r in all_sig if sum(1 for d in DRUGS if all_raw.get(d,{}).get(r,0)>=2)>=2]
@@ -876,10 +896,10 @@ with t_crossdrug:
             bar_rows=[{"Drug":d,"Reaction":r,"PRR":round(all_raw.get(d,{}).get(r,0),2)} for d in DRUGS for r in top_c]
             fig_cb=px.bar(pd.DataFrame(bar_rows),x="Reaction",y="PRR",color="Drug",barmode="group",color_discrete_map=DRUG_COLORS)
             fig_cb.add_hline(y=2,line_dash="dash",line_color="#D8D4CB",line_width=1)
-            fig_cb.update_layout(**PLOT_THEME,height=320,
+            fig_cb.update_layout(**_layout(height=320,
                 title=dict(text="Top Shared Signals — PRR by Drug",font=dict(family="EB Garamond",size=16,color="#1E1C1A")),
                 xaxis=dict(tickangle=-40,tickfont=dict(size=8)),
-                legend=dict(font=dict(size=10),bgcolor="rgba(253,252,249,0.95)",bordercolor="#D8D4CB",borderwidth=1),margin=dict(l=10,r=10,t=44,b=100))
+                legend=dict(font=dict(size=10),bgcolor="rgba(253,252,249,0.95)",bordercolor="#D8D4CB",borderwidth=1),margin=dict(l=10,r=10,t=44,b=100)))
             st.plotly_chart(fig_cb,use_container_width=True)
     else: st.info("Insufficient data. Lower thresholds.")
 
