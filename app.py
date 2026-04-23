@@ -1,6 +1,6 @@
 """
-NeuroVigilance v8 — Neurological Pharmacovigilance Signal Detection
-FDA FAERS · PRR · EBGM · BCPNN/IC · FDR · Haldane · Weber
+NeuroVigilance v9 — Neurological Pharmacovigilance Signal Detection
+FDA FAERS · PRR · EBGM · BCPNN/IC · FDR · Haldane · Weber · PubMed
 
 Drug classes (neuro-narrative):
   Cholinesterase Inhibitors  — Alzheimer's disease
@@ -14,6 +14,9 @@ Statistical framework:
   Benjamini & Hochberg 1995   — FDR (BH)
   Haldane 1940; Anscombe 1956 — +0.5 continuity correction
   Weber 1984                  — temporal reporting flag
+
+v9 additions:
+  PubMed E-utilities API      — real-time literature context per signal
 """
 
 import streamlit as st
@@ -159,6 +162,17 @@ html, body, [class*="css"] {
 .ct-table td { padding:8px 12px; border:0.5px solid #D8D4CB; text-align:center; color:#1E1C1A; }
 .ct-table td.hl { color:#3C3489; font-weight:500; }
 
+/* PubMed literature card */
+.pub-card {
+  background: #fff; border: 0.5px solid #D8D4CB; border-radius: 12px;
+  padding: 12px 16px; margin: 6px 0; transition: border-color 0.15s ease;
+}
+.pub-card:hover { border-color: #7F77DD; }
+.pub-title { font-family: 'DM Sans', sans-serif; font-size: 13px; color: #3C3489; font-weight: 500; line-height: 1.4; }
+.pub-title a { color: #3C3489; text-decoration: none; }
+.pub-title a:hover { text-decoration: underline; }
+.pub-meta { font-family: 'DM Sans', sans-serif; font-size: 11px; color: #A09B94; margin-top: 4px; }
+
 #MainMenu { visibility:hidden; } footer { visibility:hidden; }
 div[data-testid="column"] { padding: 0 6px; }
 hr { border-color: #D8D4CB; border-width: 0.5px; margin: 24px 0; }
@@ -229,9 +243,7 @@ _BASE_LAYOUT = dict(
 _BASE_AXIS = dict(gridcolor="#EEECEA",linecolor="#D8D4CB",tickfont=dict(size=9,color="#A09B94"))
 
 def _layout(**overrides):
-    """Merge base layout with per-call overrides without duplicate kwarg errors."""
     merged = dict(_BASE_LAYOUT)
-    # Deep-merge xaxis/yaxis so callers can extend without conflict
     if "xaxis" in overrides:
         merged["xaxis"] = {**_BASE_AXIS, **overrides.pop("xaxis")}
     else:
@@ -243,7 +255,6 @@ def _layout(**overrides):
     merged.update(overrides)
     return merged
 
-# Keep PLOT_THEME as alias for code that doesn't override axes
 PLOT_THEME = _layout()
 
 EBGM_A1,EBGM_B1 = 0.20,0.06
@@ -296,8 +307,211 @@ def bcpnn_ic(a,b,c,d):
     se=np.sqrt(max(var,1e-10))
     return round(ic,3),round(ic-1.96*se,3),round(ic+1.96*se,3)
 
+# ─── PUBMED LITERATURE CONTEXT (v9 NEW) ───────────────────────────────────────
+@st.cache_data(show_spinner=False, ttl=86400)
+def fetch_pubmed_signal(drug: str, reaction: str, max_results: int = 5) -> list:
+    """
+    Query NCBI PubMed E-utilities for pharmacovigilance literature
+    relevant to a specific drug-reaction pair.
+    Returns a list of dicts: {title, authors, journal, year, url, abstract_snippet}.
+    Uses NCBI E-utilities (free, no API key required for low-volume use).
+    """
+    # Build a focused pharmacovigilance query
+    query = f'"{drug}"[Title/Abstract] AND "{reaction}"[Title/Abstract] AND (pharmacovigilance OR "adverse drug reaction" OR "adverse event" OR "case report" OR "spontaneous report")'
+    search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+    search_params = {
+        "db": "pubmed",
+        "term": query,
+        "retmax": max_results,
+        "sort": "relevance",
+        "retmode": "json",
+        "tool": "NeuroVigilance",
+        "email": "neurovigilance@northwestern.edu",
+    }
+    try:
+        r = requests.get(search_url, params=search_params, timeout=10)
+        r.raise_for_status()
+        ids = r.json().get("esearchresult", {}).get("idlist", [])
+    except Exception:
+        return []
+
+    if not ids:
+        # Fallback: broader query without MeSH restriction
+        fallback_query = f"{drug} {reaction} adverse drug reaction"
+        try:
+            search_params["term"] = fallback_query
+            r = requests.get(search_url, params=search_params, timeout=10)
+            r.raise_for_status()
+            ids = r.json().get("esearchresult", {}).get("idlist", [])
+        except Exception:
+            return []
+
+    if not ids:
+        return []
+
+    # Fetch summaries for retrieved IDs
+    summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+    summary_params = {
+        "db": "pubmed",
+        "id": ",".join(ids),
+        "retmode": "json",
+        "tool": "NeuroVigilance",
+        "email": "neurovigilance@northwestern.edu",
+    }
+    try:
+        s = requests.get(summary_url, params=summary_params, timeout=10)
+        s.raise_for_status()
+        results = s.json().get("result", {})
+    except Exception:
+        return []
+
+    out = []
+    for uid in ids:
+        doc = results.get(uid, {})
+        if not doc or doc.get("error"):
+            continue
+        title = doc.get("title", "").rstrip(".")
+        if not title:
+            continue
+
+        # Extract authors (first 3 + et al.)
+        authors_raw = doc.get("authors", [])
+        if authors_raw:
+            names = [a.get("name", "") for a in authors_raw[:3]]
+            author_str = ", ".join(n for n in names if n)
+            if len(authors_raw) > 3:
+                author_str += " et al."
+        else:
+            author_str = ""
+
+        journal = doc.get("fulljournalname", doc.get("source", ""))
+        pub_date = doc.get("pubdate", "")
+        year = pub_date[:4] if pub_date else ""
+        volume = doc.get("volume", "")
+        issue = doc.get("issue", "")
+        pages = doc.get("pages", "")
+        pub_url = f"https://pubmed.ncbi.nlm.nih.gov/{uid}/"
+
+        # Article type tags
+        pub_types = [pt.get("value","") for pt in doc.get("pubtype",[])]
+        is_case = any("Case Reports" in pt for pt in pub_types)
+        is_review = any("Review" in pt for pt in pub_types)
+        is_rct = any("Randomized Controlled Trial" in pt for pt in pub_types)
+        if is_rct:
+            art_type = "RCT"
+        elif is_review:
+            art_type = "Review"
+        elif is_case:
+            art_type = "Case Report"
+        else:
+            art_type = "Original Article"
+
+        out.append({
+            "pmid": uid,
+            "title": title,
+            "authors": author_str,
+            "journal": journal,
+            "year": year,
+            "volume": volume,
+            "issue": issue,
+            "pages": pages,
+            "url": pub_url,
+            "art_type": art_type,
+        })
+
+    return out
+
+
+def render_pubmed_section(drug: str, reaction: str) -> None:
+    """Render the PubMed literature context panel for a drug-reaction pair."""
+    st.markdown(
+        "<div class='section-label'>Literature Context — PubMed (NCBI E-utilities)</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""<div class='method-card'>Real-time literature search for <strong>{drug} × {reaction}</strong>.
+        Queries PubMed for pharmacovigilance, adverse event, and case report literature.
+        Results ranked by relevance. Links open full records in PubMed.</div>""",
+        unsafe_allow_html=True,
+    )
+
+    with st.spinner(f"Querying PubMed for {drug} × {reaction}…"):
+        pubs = fetch_pubmed_signal(drug, reaction, max_results=5)
+
+    if not pubs:
+        st.markdown(
+            "<div class='warn-card'>No PubMed results found for this drug–reaction pair. "
+            "Try lowering PRR thresholds or selecting a more common reaction.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    # Render each result as a styled card
+    type_colors = {
+        "RCT":             ("#EAF3DE", "#27500A"),
+        "Review":          ("#EEEDFE", "#3C3489"),
+        "Case Report":     ("#FAEEDA", "#633806"),
+        "Original Article":("#F6F4EF", "#6B6760"),
+    }
+
+    for pub in pubs:
+        bg, fg = type_colors.get(pub["art_type"], ("#F6F4EF", "#6B6760"))
+        citation_parts = []
+        if pub["journal"]:
+            citation_parts.append(f"<em>{pub['journal']}</em>")
+        if pub["year"]:
+            citation_parts.append(pub["year"])
+        if pub["volume"]:
+            vol_str = pub["volume"]
+            if pub["issue"]:
+                vol_str += f"({pub['issue']})"
+            citation_parts.append(vol_str)
+        if pub["pages"]:
+            citation_parts.append(f"pp. {pub['pages']}")
+        citation = " · ".join(citation_parts)
+
+        st.markdown(f"""
+        <div class='pub-card'>
+          <div style='display:flex;align-items:flex-start;gap:10px;'>
+            <span style='display:inline-block;background:{bg};color:{fg};border-radius:20px;
+                         padding:2px 8px;font-size:9px;font-weight:500;font-family:"DM Sans",sans-serif;
+                         letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;margin-top:2px;'>
+              {pub["art_type"]}
+            </span>
+            <div>
+              <div class='pub-title'>
+                <a href='{pub["url"]}' target='_blank'>{pub["title"]}</a>
+              </div>
+              <div class='pub-meta'>
+                {pub["authors"]}{"  ·  " if pub["authors"] else ""}{citation}
+                &nbsp;&nbsp;
+                <a href='{pub["url"]}' target='_blank'
+                   style='color:#7F77DD;font-size:10px;text-decoration:none;'>
+                  PMID {pub["pmid"]} ↗
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Link to full PubMed search for this pair
+    pubmed_search_url = (
+        f"https://pubmed.ncbi.nlm.nih.gov/?term="
+        f"{requests.utils.quote(drug)}+{requests.utils.quote(reaction)}"
+        f"+adverse+drug+reaction&sort=relevance"
+    )
+    st.markdown(
+        f"<div style='text-align:right;margin-top:8px;'>"
+        f"<a href='{pubmed_search_url}' target='_blank' "
+        f"style='font-family:\"DM Sans\",sans-serif;font-size:11px;color:#7F77DD;text-decoration:none;'>"
+        f"View all results in PubMed ↗</a></div>",
+        unsafe_allow_html=True,
+    )
+
+
 # ─── DATA LAYER ───────────────────────────────────────────────────────────────
-def _parse(rep,drug):
+def _parse(rep, drug):
     p=rep.get("patient",{})
     rxns=[rx.get("reactionmeddrapt","").strip().title() for rx in p.get("reaction",[]) if rx.get("reactionmeddrapt")]
     sx=p.get("patientsex"); sex={1:"Male","1":"Male",2:"Female","2":"Female"}.get(sx,"Unknown")
@@ -544,7 +758,7 @@ with st.sidebar:
         Neuro<span style="color:#3C3489;">Vigilance</span></div>
       <div style='font-family:"DM Sans",sans-serif;font-size:10px;font-weight:500;color:#A09B94;
                   letter-spacing:0.13em;text-transform:uppercase;margin-top:6px;'>
-        FDA FAERS · PRR · EBGM · IC</div>
+        FDA FAERS · PRR · EBGM · IC · PubMed</div>
     </div>
     """,unsafe_allow_html=True)
 
@@ -568,7 +782,7 @@ with st.sidebar:
     st.markdown("""<div style='font-family:DM Sans,sans-serif;font-size:12px;color:#A09B94;line-height:2;'>
     PRR · Evans 2001<br>EBGM · DuMouchel 1999<br>IC · Bate 1998 / Noren 2006<br>
     FDR · Benjamini-Hochberg<br>Haldane +0.5 correction<br>Background gate: c ≥ 3<br>
-    Corpus: 1,000 reports/drug</div>""",unsafe_allow_html=True)
+    Corpus: 1,000 reports/drug<br>Literature · NCBI PubMed</div>""",unsafe_allow_html=True)
 
 # ─── DATA LOADING ─────────────────────────────────────────────────────────────
 prog=st.progress(0); stat=st.empty()
@@ -618,7 +832,7 @@ st.markdown(f"""
 <div class='nv-header'>
   <div>
     <div class='nv-wordmark'>Neuro<span>Vigilance</span></div>
-    <div class='nv-tagline'>PRR · EBGM · BCPNN/IC · FDR · Haldane · Weber · FDA FAERS · v8</div>
+    <div class='nv-tagline'>PRR · EBGM · BCPNN/IC · FDR · Haldane · Weber · PubMed · FDA FAERS · v9</div>
   </div>
   <div class='nv-drug-badge'>{sel_drug} · {sel_class}</div>
 </div>
@@ -659,7 +873,7 @@ with t_signals:
         dl_col,_,nv_col=st.columns([1,4,1])
         with dl_col:
             buf=io.StringIO(); exp.to_csv(buf,index=False)
-            st.download_button("⬇ Export CSV",buf.getvalue(),f"signals_{sel_drug.lower()}_v8.csv","text/csv")
+            st.download_button("⬇ Export CSV",buf.getvalue(),f"signals_{sel_drug.lower()}_v9.csv","text/csv")
         with nv_col:
             if n_novel>0 and label_ok:
                 st.markdown(f"<span class='pill-green'>🆕 {n_novel} unlabeled</span>",unsafe_allow_html=True)
@@ -711,6 +925,9 @@ with t_signals:
                     <span style='color:#3C3489;font-weight:500;'>O/E</span> {oe_:.2f}× · <span style='color:#3C3489;font-weight:500;'>ROR</span> {row['ROR']:.3f}<br>
                     <span style='color:#3C3489;font-weight:500;'>Tier</span> <span style='color:{tc_};font-weight:500;'>{row['Tier']}</span>
                   </div></div>""",unsafe_allow_html=True)
+
+            # ── PubMed Literature Context (v9) ──────────────────────────────
+            render_pubmed_section(sel_drug, sel_rxn)
 
         st.markdown("<div class='section-label'>Forest Plot — PRR 95% CI</div>",unsafe_allow_html=True)
         st.plotly_chart(forest_fig(sigs,sel_drug),use_container_width=True)
@@ -917,7 +1134,7 @@ with t_full:
                            "Composite":st.column_config.ProgressColumn("Composite",format="%.3f",min_value=0,max_value=1),
                            "Labeled":st.column_config.TextColumn("In Label",help="✓=labeled · 🆕=unlabeled")})
         buf2=io.StringIO(); fd.to_csv(buf2,index=False)
-        st.download_button("⬇ Export full PRR table",buf2.getvalue(),f"full_prr_{sel_drug.lower()}_v8.csv","text/csv")
+        st.download_button("⬇ Export full PRR table",buf2.getvalue(),f"full_prr_{sel_drug.lower()}_v9.csv","text/csv")
 
 # ─── METHODOLOGY FOOTER ───────────────────────────────────────────────────────
 st.markdown("<hr>",unsafe_allow_html=True)
@@ -930,8 +1147,13 @@ st.markdown(f"""<div class='method-card'>
   EBGM: Gamma-Poisson mixture (DuMouchel 1999; α₁=0.20, β₁=0.06, w₁=0.10, α₂=1.40, β₂=1.80).
   EB05 = 5th-percentile credible lower bound. Signal: PRR≥{min_prr} ∧ χ²≥{min_chi2} ∧ n≥{min_n} ∧ EB05≥{min_eb05} ∧ BH p&lt;0.05.
   Weber flag: ≥60% reports in first 3 years (n≥8).<br><br>
+  <strong>Literature Integration</strong><br>
+  Real-time PubMed query via NCBI E-utilities API (esearch + esummary). Per-signal search targets
+  pharmacovigilance, adverse drug reaction, case report, and spontaneous reporting literature.
+  Results cached 24h. Article types classified from PubMed publication type tags.<br><br>
   <strong>Limitations</strong><br>
   FAERS is voluntary spontaneous reporting. PRR/EBGM measure disproportionate reporting frequency, not incidence or causality.
   Subject to under-reporting, Weber effect, notoriety bias, and confounding by indication. No exposure denominator.
   Corpus: up to 1,000 reports/drug. Label novelty detection uses approximate substring matching on prose text.
+  PubMed results reflect indexed literature only; preprints and grey literature are excluded.
 </div>""",unsafe_allow_html=True)
