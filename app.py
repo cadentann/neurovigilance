@@ -326,7 +326,7 @@ def fetch_pubmed_signal(drug: str, reaction: str, max_results: int = 5) -> list:
         "sort": "relevance",
         "retmode": "json",
         "tool": "NeuroVigilance",
-        "email": "neurovigilance@northwestern.edu",
+        "email": "cadentan2029@northwestern.edu",
     }
     try:
         r = requests.get(search_url, params=search_params, timeout=10)
