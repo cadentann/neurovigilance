@@ -2,8 +2,7 @@
 **Open-source pharmacovigilance signal detection for neurological drug classes** FDA FAERS · PRR · EBGM · BCPNN/IC · FDR · PubMed Literature Integration
 
 **ORCID:** [0009-0004-8611-8436](https://orcid.org/0009-0004-8611-8436)  
-**DOI:** [FILL IN DOI AFTER MINTING]
-
+**DOI:** 10.5281/zenodo.19777525
 ---
 
 ## What It Does
